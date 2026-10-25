@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Invertor Casa</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1f2630; --line: #2d3540;
+    --text: #e6edf3; --dim: #8b96a3;
+    --pv: #f5c518; --grid: #9d8cff; --bat: #2ecc71; --load: #22d3ee; --err: #ff5c5c; --warn: #ff9f1a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; color: #0d1117; background: var(--err); }
+  .pill.ok { background: var(--bat); } .pill.demo { background: var(--warn); }
+  #age { font-size: 12px; color: var(--dim); padding: 0 16px 6px; }
+  main { padding: 0 16px; max-width: 640px; margin: 0 auto; }
+  .page { display: none; } .page.on { display: block; }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--panel);
+    border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
+  nav button { flex: 1; background: none; border: 0; color: var(--dim); padding: 10px 0 12px; font-size: 12px; }
+  nav button b { display: block; font-size: 20px; line-height: 1.2; }
+  nav button.on { color: var(--text); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .grid2 .card { margin: 0; }
+  .lbl { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .big { font-size: 26px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row span:first-child { color: var(--dim); }
+  .row span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .socwrap { display: flex; align-items: center; gap: 16px; }
+  .socwrap svg { flex: none; }
+  h2 { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 8px; }
+  .chart { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--dim); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .set { display: flex; justify-content: space-between; align-items: center; padding: 12px 0;
+    border-bottom: 1px solid var(--line); cursor: pointer; }
+  .set:last-child { border-bottom: 0; }
+  .set b { font-weight: 600; } .set span { color: var(--load); }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 10px 12px; font-size: 16px; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 10px; }
+  .btn { display: block; width: 100%; padding: 12px; margin-top: 14px; font-size: 16px; font-weight: 700;
+    border: 0; border-radius: 10px; background: #2f81f7; color: #fff; }
+  .btn.sec { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .note { font-size: 13px; color: var(--dim); }
+  #toast { position: fixed; left: 16px; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 9;
+    background: #2a313c; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+    display: none; box-shadow: 0 6px 20px #0008; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px;
+    width: min(92vw, 420px); padding: 16px; }
+  dialog::backdrop { background: #000a; }
+  .days { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .day { text-align: center; }
+  .day .ico { font-size: 28px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Invertor Casa</h1>
+  <span class="pill" id="pBoard">PLACA</span>
+  <span class="pill" id="pInv">INV</span>
+</header>
+<div id="age">Se conecteaza...</div>
+
+<main>
+  <!-- ACASA -->
+  <section class="page on" id="pg-home">
+    <div class="card socwrap">
+      <svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true">
+        <circle cx="48" cy="48" r="40" fill="none" stroke="var(--line)" stroke-width="10"/>
+        <circle id="socArc" cx="48" cy="48" r="40" fill="none" stroke="var(--bat)" stroke-width="10"
+          stroke-linecap="round" stroke-dasharray="0 252" transform="rotate(-90 48 48)"/>
+        <text id="socTxt" x="48" y="55" text-anchor="middle" font-size="22" font-weight="700" fill="var(--text)">-</text>
+      </svg>
+      <div>
+        <div class="lbl" style="color:var(--bat)">Baterie</div>
+        <div class="big" id="batW">-</div>
+        <div class="sub" id="batSub">-</div>
+        <div class="sub" id="batAuto"></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="lbl" style="color:var(--pv)">Panouri</div>
+        <div class="big" id="pvW">-</div><div class="sub" id="pvSub">-</div></div>
+      <div class="card"><div class="lbl" style="color:var(--load)">Casa</div>
+        <div class="big" id="outW">-</div><div class="sub" id="outSub">-</div></div>
+      <div class="card"><div class="lbl" style="color:var(--grid)">Retea</div>
+        <div class="big" id="gridW">-</div><div class="sub" id="gridSub">-</div></div>
+      <div class="card"><div class="lbl">Invertor</div>
+        <div class="big" id="mode" style="font-size:20px">-</div><div class="sub" id="invSub">-</div></div>
+    </div>
+    <h2>Energie azi</h2>
+    <div class="card" id="today"></div>
+    <h2>Detalii</h2>
+    <div class="card" id="details"></div>
+  </section>
+
+  <!-- ISTORIC -->
+  <section class="page" id="pg-hist">
+    <h2>Puteri, ultimele 24 h</h2>
+    <div class="card">
+      <svg class="chart" id="chP" viewBox="0 0 360 170"></svg>
+      <div class="legend"><span><i style="background:var(--pv)"></i>Panouri</span>
+        <span><i style="background:var(--load)"></i>Casa</span><span><i style="background:var(--bat)"></i>Baterie (+ incarcare)</span></div>
+    </div>
+    <h2>Stare de incarcare (SOC)</h2>
+    <div class="card"><svg class="chart" id="chS" viewBox="0 0 360 120"></svg></div>
+    <p class="note">Istoricul il tine placa in memorie (medii pe 5 minute) si se pierde daca placa reporneste.</p>
+  </section>
+
+  <!-- VREME -->
+  <section class="page" id="pg-wx">
+    <div class="card" id="wxNow"><span class="note">Seteaza locatia in ⚙ ca sa vezi vremea.</span></div>
+    <h2>Urmatoarele zile</h2>
+    <div class="card"><div class="days" id="wxDays"></div></div>
+    <h2>Radiatie solara, urmatoarele 24 h</h2>
+    <div class="card"><svg class="chart" id="chW" viewBox="0 0 360 140"></svg>
+      <div class="legend"><span><i style="background:var(--pv)"></i>Radiatie W/m²</span>
+        <span><i style="background:var(--dim)"></i>Nori %</span></div></div>
+  </section>
+
+  <!-- SETARI INVERTOR -->
+  <section class="page" id="pg-set">
+    <h2>Setari invertor</h2>
+    <div class="card" id="setList"><span class="note">Setarile inca nu au fost citite de placa.</span></div>
+    <p class="note">Atinge o setare ca s-o schimbi. Placa verifica valoarea inainte s-o trimita la invertor.</p>
+  </section>
+
+  <!-- CONFIGURARE APLICATIE -->
+  <section class="page" id="pg-cfg">
+    <h2>Server MQTT (EMQX Cloud)</h2>
+    <div class="card">
+      <label for="cHost">Adresa clusterului</label>
+      <input id="cHost" placeholder="abcd1234.s1.eu.hivemq.cloud" autocapitalize="off" autocorrect="off">
+      <label for="cUser">Utilizator (cel pentru telefon)</label>
+      <input id="cUser" autocapitalize="off" autocorrect="off">
+      <label for="cPass">Parola</label>
+      <input id="cPass" type="password">
+      <label for="cPort">Port WebSocket securizat (EMQX: 8084, HiveMQ: 8884)</label>
+      <input id="cPort" inputmode="numeric" placeholder="8084">
+      <label for="cPrefix">Prefix subiecte</label>
+      <input id="cPrefix" value="isolar/casa" autocapitalize="off" autocorrect="off">
+    </div>
+    <h2>Locatie si panouri (pentru vreme)</h2>
+    <div class="card">
+      <div class="grid2" style="margin:0">
+        <div><label for="cLat">Latitudine</label><input id="cLat" inputmode="decimal"></div>
+        <div><label for="cLon">Longitudine</label><input id="cLon" inputmode="decimal"></div>
+      </div>
+      <button class="btn sec" id="btnGeo">Foloseste locatia telefonului</button>
+      <label for="cKwp">Puterea panourilor (kWp)</label>
+      <input id="cKwp" inputmode="decimal" placeholder="ex. 3.2">
+    </div>
+    <button class="btn" id="btnSave">Salveaza si conecteaza</button>
+    <p class="note">Datele raman doar pe acest telefon.</p>
+  </section>
+</main>
+
+<nav>
+  <button data-p="home" class="on"><b>⌂</b>Acasa</button>
+  <button data-p="hist"><b>📈</b>Istoric</button>
+  <button data-p="wx"><b>☀</b>Vreme</button>
+  <button data-p="set"><b>⚡</b>Setari</button>
+  <button data-p="cfg"><b>⚙</b>Config</button>
+</nav>
+
+<div id="toast"></div>
+
+<dialog id="dlg">
+  <form method="dialog">
+    <div class="lbl" id="dTitle"></div>
+    <div class="sub" id="dCur" style="margin-top:4px"></div>
+    <div id="dField"></div>
+    <div class="sub" id="dHint" style="margin-top:6px"></div>
+    <button class="btn" value="ok">Trimite la invertor</button>
+    <button class="btn sec" value="cancel">Renunta</button>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const cfg = Object.assign({ host: '', port: '8084', user: '', pass: '', prefix: 'isolar/casa', lat: '', lon: '', kwp: '' },
+  JSON.parse(localStorage.getItem('isolarCfg') || '{}'));
+let client = null, st = null, sets = null, hist = null, lastMsg = 0, boardOnline = null;
+
+// ---------- navigare ----------
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'pg-' + b.dataset.p));
+  if (b.dataset.p === 'wx') loadWeather();
+  if (b.dataset.p === 'hist') drawHistory();
+});
+
+function toast(t, ms = 3500) {
+  const e = $('toast'); e.textContent = t; e.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => e.style.display = 'none', ms);
+}
+const n = (v, d = 0) => v == null || isNaN(v) ? '-' : Number(v).toFixed(d);
+const row = (a, b, col) => `<div class="row"><span>${a}</span><span${col ? ` style="color:${col}"` : ''}>${b}</span></div>`;
+
+// ---------- MQTT ----------
+function connect() {
+  if (client) { client.end(true); client = null; }
+  if (!cfg.host || !cfg.user) { $('age').textContent = 'Completeaza datele serverului in ⚙ Config.'; return; }
+  $('age').textContent = 'Se conecteaza la ' + cfg.host + '...';
+  client = mqtt.connect(`wss://${cfg.host}:${cfg.port || 8084}/mqtt`, {
+    username: cfg.user, password: cfg.pass, clientId: 'tel-' + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 5000, connectTimeout: 10000, clean: true,
+  });
+  client.on('connect', () => { client.subscribe(cfg.prefix + '/#', { qos: 1 }); refreshHeader(); });
+  client.on('error', e => { $('age').textContent = 'Eroare server: ' + e.message; });
+  client.on('close', refreshHeader);
+  client.on('message', (t, p) => {
+    const key = t.slice(cfg.prefix.length + 1), s = p.toString();
+    try {
+      if (key === 'state') { st = JSON.parse(s); lastMsg = Date.now(); renderHome(); }
+      else if (key === 'settings') { sets = JSON.parse(s); renderSettings(); }
+      else if (key === 'history') { hist = JSON.parse(s); hist.t = hist.k.map(k => hist.t0 + k * hist.step); if ($('pg-hist').classList.contains('on')) drawHistory(); }
+      else if (key === 'online') boardOnline = s === '1';
+      else if (key === 'cmd/result') { const r = JSON.parse(s); toast(r.cmd + ': ' + r.result, 5000); }
+    } catch (e) { console.warn(key, e); }
+    refreshHeader();
+  });
+}
+
+function refreshHeader() {
+  const conn = client && client.connected;
+  const fresh = st && Date.now() - lastMsg < 35000;      // placa trimite la 10 s
+  const pb = $('pBoard'); pb.className = 'pill' + (conn && boardOnline && fresh ? ' ok' : '');
+  const pi = $('pInv');
+  if (st && st.demo) { pi.className = 'pill demo'; pi.textContent = 'DEMO'; }
+  else { pi.className = 'pill' + (fresh && st.inv ? ' ok' : ''); pi.textContent = 'INV'; }
+  let t;
+  if (!conn) t = cfg.host ? 'Fara legatura cu serverul, reincerc...' : 'Completeaza datele serverului in ⚙ Config.';
+  else if (!st) t = 'Conectat. Astept datele de la placa...';
+  else {
+    const s = Math.round((Date.now() - lastMsg) / 1000);
+    t = (boardOnline === false ? 'Placa e deconectata. ' : '') + 'Actualizat acum ' + s + ' s';
+  }
+  $('age').textContent = t;
+}
+setInterval(refreshHeader, 1000);
+
+// ---------- ACASA ----------
+function renderHome() {
+  const d = st;
+  const soc = d.soc || 0;
+  $('socArc').setAttribute('stroke-dasharray', `${(soc / 100 * 251.3).toFixed(1)} 252`);
+  $('socArc').setAttribute('stroke', soc > 30 ? 'var(--bat)' : 'var(--warn)');
+  $('socTxt').textContent = n(soc) + '%';
+  const bw = d.batW || 0, charging = bw > 5, dis = bw < -5;
+  $('batW').textContent = n(Math.abs(bw)) + ' W';
+  $('batW').style.color = charging ? 'var(--bat)' : dis ? 'var(--err)' : 'var(--text)';
+  $('batSub').textContent = `${n(d.batV, 2)} V · ${n(d.kwh, 2)} kWh / ${n(d.ah)} Ah · ` +
+    (charging ? 'se incarca' : dis ? 'se descarca' : 'repaus');
+  if (dis) {
+    const min = Math.round(d.kwh * 1000 / -bw * 60);
+    $('batAuto').textContent = `Mai tine ~${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')} la consumul de acum`;
+  } else $('batAuto').textContent = '';
+  $('pvW').textContent = n(d.pvW) + ' W';
+  $('pvSub').textContent = `${n(d.pvV)} V · ${n(d.pvI, 1)} A`;
+  $('outW').textContent = n(d.outW) + ' W';
+  $('outSub').textContent = `${n(d.outVA)} VA · ${n(d.load)}% din 5,5 kW`;
+  const onGrid = d.mode === 'L';
+  $('gridW').textContent = onGrid ? n(d.gridW) + ' W' : '-';
+  $('gridSub').textContent = `${n(d.gridV)} V · ${n(d.gridHz, 1)} Hz`;
+  $('mode').textContent = d.modeText || d.mode;
+  $('mode').style.color = d.mode === 'F' ? 'var(--err)' : 'var(--text)';
+  $('invSub').textContent = `${n(d.temp)} °C · bus ${n(d.bus)} V`;
+  $('today').innerHTML = d.tPv == null ? '<span class="note">Placa nu stie inca ora (se sincronizeaza din internet).</span>' :
+    row('Produs de panouri', n(d.tPv, 2) + ' kWh', 'var(--pv)') + row('Consumat de casa', n(d.tLoad, 2) + ' kWh', 'var(--load)') +
+    row('Incarcat in baterie', n(d.tIn, 2) + ' kWh', 'var(--bat)') + row('Descarcat din baterie', n(d.tOut, 2) + ' kWh', 'var(--err)');
+  $('details').innerHTML =
+    row('Iesire', `${n(d.outV, 1)} V · ${n(d.outHz, 1)} Hz`) +
+    row('Curent baterie', n(d.batI) + ' A') +
+    row('Total panouri / casa', `${n(d.ePv, 1)} / ${n(d.eLoad, 1)} kWh`) +
+    row('Total baterie in / out', `${n(d.eIn, 1)} / ${n(d.eOut, 1)} kWh`) +
+    row('Biti de stare', d.status || '-') +
+    row('Semnal WiFi placa', n(d.rssi) + ' dBm');
+}
+
+// ---------- grafice ----------
+function chart(svg, t, series, opt = {}) {
+  const W = 360, H = +svg.getAttribute('viewBox').split(' ')[3], L = 34, R = 6, T = 8, B = 18;
+  if (!t || t.length < 2) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" fill="var(--dim)" font-size="12" text-anchor="middle">Inca nu sunt date</text>`; return; }
+  let lo = opt.min ?? Infinity, hi = opt.max ?? -Infinity;
+  if (opt.min == null || opt.max == null) series.forEach(s => s.d.forEach(v => { if (opt.min == null) lo = Math.min(lo, v); if (opt.max == null) hi = Math.max(hi, v); }));
+  if (opt.min == null && lo > 0) lo = 0;
+  if (hi - lo < 1) hi = lo + 1;
+  let tick = (hi - lo) / 4;
+  if (opt.min == null || opt.max == null) {           // capete rotunde: 500, 1000, 2000...
+    const mag = Math.pow(10, Math.floor(Math.log10(tick)));
+    tick = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= tick);
+    lo = Math.floor(lo / tick) * tick; hi = Math.ceil(hi / tick) * tick;
+  }
+  const t0 = t[0], t1 = t[t.length - 1];
+  const X = v => L + (v - t0) / (t1 - t0 || 1) * (W - L - R), Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  let g = '';
+  for (let v = lo; v <= hi + tick / 2; v += tick) {
+    const y = Y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--line)" stroke-width=".6"/>` +
+      `<text x="${L - 4}" y="${y + 3}" fill="var(--dim)" font-size="9" text-anchor="end">${Math.round(v)}${opt.unit || ''}</text>`;
+  }
+  const hStep = 3600 * ((t1 - t0) > 12 * 3600 ? 6 : 3);
+  for (let h = Math.ceil(t0 / hStep) * hStep; h <= t1; h += hStep) {
+    const x = X(h), lbl = new Date(h * 1000).getHours() + ':00';
+    g += `<line x1="${x}" x2="${x}" y1="${T}" y2="${H - B}" stroke="var(--line)" stroke-width=".6"/>` +
+      `<text x="${x}" y="${H - 5}" fill="var(--dim)" font-size="9" text-anchor="middle">${lbl}</text>`;
+  }
+  series.forEach(s => {
+    const pts = s.d.map((v, i) => `${X(t[i]).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+    g += `<polyline points="${pts}" fill="none" stroke="${s.c}" stroke-width="1.6" stroke-linejoin="round"/>`;
+  });
+  svg.innerHTML = g;
+}
+
+function drawHistory() {
+  if (!hist) { chart($('chP'), null); chart($('chS'), null); return; }
+  chart($('chP'), hist.t, [{ d: hist.pv, c: 'var(--pv)' }, { d: hist.load, c: 'var(--load)' }, { d: hist.bat, c: 'var(--bat)' }], { unit: '' });
+  chart($('chS'), hist.t, [{ d: hist.soc, c: 'var(--bat)' }], { min: 0, max: 100, unit: '%' });
+}
+
+// ---------- vreme (Open-Meteo, direct de pe telefon) ----------
+const WX = c => c === 0 ? ['☀️', 'Senin'] : c <= 2 ? ['🌤️', 'Partial noros'] : c === 3 ? ['☁️', 'Noros'] :
+  c <= 48 ? ['🌫️', 'Ceata'] : c <= 57 ? ['🌦️', 'Burnita'] : c <= 67 ? ['🌧️', 'Ploaie'] : c <= 77 ? ['❄️', 'Ninsoare'] :
+  c <= 82 ? ['🌧️', 'Averse'] : c <= 86 ? ['🌨️', 'Averse de ninsoare'] : ['⛈️', 'Furtuna'];
+let wxAt = 0;
+async function loadWeather() {
+  if (!cfg.lat || !cfg.lon || Date.now() - wxAt < 10 * 60000) return;
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${cfg.lat}&longitude=${cfg.lon}` +
+      '&current=temperature_2m,weather_code,cloud_cover,wind_speed_10m,relative_humidity_2m' +
+      '&hourly=shortwave_radiation,cloud_cover&daily=weather_code,temperature_2m_max,temperature_2m_min,' +
+      'shortwave_radiation_sum,sunrise,sunset&timezone=auto&forecast_days=3';
+    const w = await (await fetch(u)).json();
+    wxAt = Date.now();
+    const c = w.current, [ico, txt] = WX(c.weather_code);
+    $('wxNow').innerHTML = `<div class="socwrap"><div style="font-size:48px">${ico}</div><div>
+      <div class="big">${n(c.temperature_2m, 1)} °C</div><div class="sub">${txt} · nori ${n(c.cloud_cover)}% ·
+      vant ${n(c.wind_speed_10m)} km/h · umiditate ${n(c.relative_humidity_2m)}%</div></div></div>` +
+      `<div class="sub" style="margin-top:8px">Rasarit ${w.daily.sunrise[0].slice(11)} · apus ${w.daily.sunset[0].slice(11)}</div>`;
+    const kwp = parseFloat(cfg.kwp);
+    $('wxDays').innerHTML = w.daily.time.map((day, i) => {
+      const [ic] = WX(w.daily.weather_code[i]);
+      const kwhm2 = w.daily.shortwave_radiation_sum[i] / 3.6;          // MJ/m² -> kWh/m²
+      const est = kwp > 0 ? `<div class="sub" style="color:var(--pv)">~${(kwhm2 * kwp * 0.75).toFixed(1)} kWh</div>` : '';
+      const name = i === 0 ? 'Azi' : i === 1 ? 'Maine' : new Date(day).toLocaleDateString('ro-RO', { weekday: 'short' });
+      return `<div class="day"><div class="sub">${name}</div><div class="ico">${ic}</div>
+        <div>${n(w.daily.temperature_2m_max[i])}° / ${n(w.daily.temperature_2m_min[i])}°</div>${est}</div>`;
+    }).join('');
+    const now = Date.now() / 1000;
+    const ts = w.hourly.time.map(x => Date.parse(x) / 1000);
+    const i0 = Math.max(0, ts.findIndex(x => x >= now - 3600)), i1 = i0 + 24;
+    chart($('chW'), ts.slice(i0, i1), [{ d: w.hourly.shortwave_radiation.slice(i0, i1), c: 'var(--pv)' },
+      { d: w.hourly.cloud_cover.slice(i0, i1).map(v => v * 10), c: 'var(--dim)' }], { min: 0, max: 1000 });
+  } catch (e) { $('wxNow').innerHTML = '<span class="note">Nu am putut citi vremea: ' + e.message + '</span>'; }
+}
+
+// ---------- setari invertor ----------
+const OUT = ['Retea intai', 'Solar intai', 'SBU'], CHG = ['Retea intai', 'Solar intai', 'Solar + retea', 'Doar solar'];
+const SETS = [
+  { k: 'out', name: 'Prioritate iesire', opts: OUT },
+  { k: 'chg', name: 'Prioritate incarcare', opts: CHG },
+  { k: 'maxchg', name: 'Max incarcare totala', list: 'optChg', unit: 'A' },
+  { k: 'maxac', name: 'Max incarcare din retea', list: 'optAc', unit: 'A' },
+  { k: 'rech', name: 'Revenire pe retea la', min: 44, max: 51, step: 1, unit: 'V' },
+  { k: 'redis', name: 'Revenire pe baterie la', min: 48, max: 58, step: 1, unit: 'V', zero: 'baterie plina' },
+  { k: 'cut', name: 'Tensiune oprire baterie', min: 40, max: 48, step: 0.1, unit: 'V' },
+  { k: 'bulk', name: 'Tensiune absorbtie (CV)', min: 48, max: 58.4, step: 0.1, unit: 'V' },
+  { k: 'float', name: 'Tensiune float', min: 48, max: 58.4, step: 0.1, unit: 'V' },
+  { k: 'btype', name: 'Tip baterie', opts: ['AGM', 'Flooded', 'User'] },
+];
+const valTxt = (s, v) => s.opts ? (s.opts[v] ?? '?') : (s.zero && +v === 0) ? s.zero : `${v} ${s.unit}`;
+
+function renderSettings() {
+  if (!sets) return;
+  $('setList').innerHTML = SETS.map((s, i) => `<div class="set" data-i="${i}"><b>${s.name}</b><span>${valTxt(s, sets[s.k])}</span></div>`).join('');
+  $('setList').querySelectorAll('.set').forEach(e => e.onclick = () => editSetting(SETS[e.dataset.i]));
+}
+
+function editSetting(s) {
+  if (!client || !client.connected) return toast('Nu esti conectat la server.');
+  const cur = sets[s.k];
+  $('dTitle').textContent = s.name;
+  $('dCur').textContent = 'Acum: ' + valTxt(s, cur);
+  let f;
+  if (s.opts) f = `<select id="dVal">${s.opts.map((o, i) => `<option value="${i}"${i === cur ? ' selected' : ''}>${o}</option>`).join('')}</select>`;
+  else if (s.list) f = `<select id="dVal">${(sets[s.list] || []).map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${v} A</option>`).join('')}</select>`;
+  else f = `<input id="dVal" type="number" inputmode="decimal" min="${s.zero ? 0 : s.min}" max="${s.max}" step="${s.step}" value="${cur}">`;
+  $('dField').innerHTML = '<label for="dVal">Valoare noua</label>' + f;
+  $('dHint').textContent = s.min != null ? `Interval: ${s.min} - ${s.max} ${s.unit}` + (s.zero ? ` (0 = ${s.zero})` : '') : '';
+  const dlg = $('dlg');
+  dlg.onclose = () => {
+    if (dlg.returnValue !== 'ok') return;
+    const v = $('dVal').value;
+    if (s.min != null && +v !== 0 && (+v < s.min || +v > s.max)) return toast('Valoare in afara intervalului.');
+    if (!confirm(`Trimit la invertor: ${s.name} = ${valTxt(s, s.opts ? +v : v)}?`)) return;
+    client.publish(cfg.prefix + '/cmd', `${s.k} ${v}`, { qos: 1, retain: false });
+    toast('Trimis, astept raspunsul invertorului...');
+  };
+  dlg.returnValue = '';
+  dlg.showModal();
+}
+
+// ---------- configurare ----------
+const CFG_KEYS = ['host', 'port', 'user', 'pass', 'prefix', 'lat', 'lon', 'kwp'];
+CFG_KEYS.forEach(k => $('c' + k[0].toUpperCase() + k.slice(1)).value = cfg[k] || '');
+$('btnSave').onclick = () => {
+  CFG_KEYS.forEach(k => cfg[k] = $('c' + k[0].toUpperCase() + k.slice(1)).value.trim());
+  cfg.host = cfg.host.replace(/^\w+:\/\//, '').replace(/[:/].*$/, '');
+  cfg.prefix = cfg.prefix.replace(/\/+$/, '') || 'isolar/casa';
+  localStorage.setItem('isolarCfg', JSON.stringify(cfg));
+  wxAt = 0; st = sets = hist = null; boardOnline = null;
+  connect(); toast('Salvat.');
+};
+$('btnGeo').onclick = () => navigator.geolocation.getCurrentPosition(
+  p => { $('cLat').value = p.coords.latitude.toFixed(4); $('cLon').value = p.coords.longitude.toFixed(4); },
+  e => toast('Nu am primit locatia: ' + e.message));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+connect();
+if (!cfg.host) document.querySelector('nav button[data-p="cfg"]').click();
+</script>
+</body>
+</html>
